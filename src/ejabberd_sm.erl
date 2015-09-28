@@ -523,9 +523,10 @@ do_route(From, To, #xmlel{} = Packet) ->
 		  <<"headline">> -> route_message(From, To, Packet, headline);
 		  <<"error">> -> ok;
 		  <<"groupchat">> ->
-		      Err = jlib:make_error_reply(Packet,
-						  ?ERR_SERVICE_UNAVAILABLE),
-		      ejabberd_router:route(To, From, Err);
+          route_message(From, To, Packet, chat);
+%% 		      Err = jlib:make_error_reply(Packet,
+%% 						  ?ERR_SERVICE_UNAVAILABLE),
+%% 		      ejabberd_router:route(To, From, Err);
 		  _ ->
 		      route_message(From, To, Packet, normal)
 		end;
@@ -543,6 +544,7 @@ do_route(From, To, #xmlel{} = Packet) ->
 			<<"normal">> -> route_message(From, To, Packet, normal);
 			<<"">> -> route_message(From, To, Packet, normal);
 			<<"error">> -> ok;
+      <<"groupchat">> -> route_message(From, To, Packet, chat);
 			_ ->
 			    Err = jlib:make_error_reply(Packet,
 							?ERR_SERVICE_UNAVAILABLE),

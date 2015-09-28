@@ -906,6 +906,7 @@ route(Pid, From, ToNick, Packet) ->
 process_groupchat_message(From,
 			  #xmlel{name = <<"message">>, attrs = Attrs} = Packet,
 			  StateData) ->
+    Items = items_with_affiliation(member, StateData) ++ items_with_affiliation(owner, StateData),
     Lang = xml:get_attr_s(<<"xml:lang">>, Attrs),
     case is_user_online(From, StateData) orelse
 	   is_user_allowed_message_nonparticipant(From, StateData)
@@ -947,10 +948,10 @@ process_groupchat_message(From,
 					      end,
 		 case IsAllowed of
 		   true ->
-			   send_multiple(
+			   send_multiple2(
 			      jlib:jid_replace_resource(StateData#state.jid, FromNick),
 			      StateData#state.server_host,
-			      StateData#state.users,
+			      Items,
 			      Packet),
 		       NewStateData2 = case has_body_or_subject(Packet) of
 			   true ->
@@ -4519,3 +4520,22 @@ has_body_or_subject(Packet) ->
 send_multiple(From, Server, Users, Packet) ->
     JIDs = [ User#user.jid || {_, User} <- ?DICT:to_list(Users)],
     ejabberd_router_multicast:route_multicast(From, Server, JIDs, Packet).
+
+send_multiple2(From, Server, Users, Packet) ->
+  JIDs = add_all_users(Users),
+%%   ?DEBUG("\n====test2====\n~p\n-------\n~p\n====test2====\n", [JIDs,Users]),
+  ejabberd_router_multicast:route_multicast(From, Server, JIDs, Packet).
+
+add_all_users(Array) ->
+  add_all_users(Array,[]).
+add_all_users([], State) ->
+  State;
+add_all_users([Head|Tail], State) ->
+  From = xml:get_tag_attr(<<"jid">>, Head),
+  {value,From1} = From,
+  FromUserParts = string:tokens(binary_to_list(From1), "@"),
+  [FromUser|T] = FromUserParts,
+  [FromServer|_] = T,
+  FromJID = jlib:make_jid(list_to_binary(FromUser), list_to_binary(FromServer), <<"">>),
+  NewState = State ++ [FromJID],
+  add_all_users(Tail, NewState).
