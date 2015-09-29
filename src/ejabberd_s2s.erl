@@ -225,7 +225,7 @@ check_peer_certificate(SockMod, Sock, Peer) ->
       {ok, Cert} ->
 	  case SockMod:get_verify_result(Sock) of
 	    0 ->
-		case idna:domain_utf8_to_ascii(Peer) of
+		case ejabberd_idna:domain_utf8_to_ascii(Peer) of
 		  false ->
 		      {error, <<"Cannot decode remote server name">>};
 		  AsciiPeer ->
@@ -241,8 +241,10 @@ check_peer_certificate(SockMod, Sock, Peer) ->
 	    VerifyRes ->
 		{error, p1_tls:get_cert_verify_string(VerifyRes, Cert)}
 	  end;
+      {error, _Reason} ->
+	    {error, <<"Cannot get peer certificate">>};
       error ->
-	  {error, <<"Cannot get peer certificate">>}
+	    {error, <<"Cannot get peer certificate">>}
     end.
 
 %%====================================================================
@@ -718,7 +720,7 @@ get_cert_domains(Cert) ->
 								     lresource =
 									 <<"">>} ->
 								    case
-								      idna:domain_utf8_to_ascii(LD)
+								      ejabberd_idna:domain_utf8_to_ascii(LD)
 									of
 								      false ->
 									  [];

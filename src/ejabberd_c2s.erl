@@ -110,6 +110,7 @@
 		mgmt_max_queue,
 		mgmt_pending_since,
 		mgmt_timeout,
+		mgmt_max_timeout,
 		mgmt_resend,
 		mgmt_stanzas_in = 0,
 		mgmt_stanzas_out = 0,
@@ -308,12 +309,16 @@ init([{SockMod, Socket}, Opts]) ->
     MaxAckQueue = case proplists:get_value(max_ack_queue, Opts) of
 		    Limit when is_integer(Limit), Limit > 0 -> Limit;
 		    infinity -> infinity;
-		    _ -> 500
+		    _ -> 1000
 		  end,
     ResumeTimeout = case proplists:get_value(resume_timeout, Opts) of
 		      Timeout when is_integer(Timeout), Timeout >= 0 -> Timeout;
 		      _ -> 300
 		    end,
+    MaxResumeTimeout = case proplists:get_value(max_resume_timeout, Opts) of
+			 Max when is_integer(Max), Max >= ResumeTimeout -> Max;
+			 _ -> ResumeTimeout
+		       end,
     ResendOnTimeout = case proplists:get_value(resend_on_timeout, Opts) of
 			Resend when is_boolean(Resend) -> Resend;
 			if_offline -> if_offline;
@@ -336,6 +341,7 @@ init([{SockMod, Socket}, Opts]) ->
 		       mgmt_state = StreamMgmtState,
 		       mgmt_max_queue = MaxAckQueue,
 		       mgmt_timeout = ResumeTimeout,
+		       mgmt_max_timeout = MaxResumeTimeout,
 		       mgmt_resend = ResendOnTimeout},
     {ok, wait_for_stream, StateData, ?C2S_OPEN_TIMEOUT}.
 
@@ -2025,6 +2031,7 @@ get_conn_type(StateData) ->
 	    p1_tls -> c2s_compressed_tls
 	end;
     ejabberd_http_bind -> http_bind;
+    ejabberd_http_ws -> websocket;
     _ -> unknown
     end.
 
@@ -2687,16 +2694,17 @@ perform_stream_mgmt(#xmlel{name = Name, attrs = Attrs}, StateData) ->
 	  StateData
     end.
 
-handle_enable(#state{mgmt_timeout = ConfigTimeout} = StateData, Attrs) ->
+handle_enable(#state{mgmt_timeout = DefaultTimeout,
+		     mgmt_max_timeout = MaxTimeout} = StateData, Attrs) ->
     Timeout = case xml:get_attr_s(<<"resume">>, Attrs) of
 		ResumeAttr when ResumeAttr == <<"true">>;
 				ResumeAttr == <<"1">> ->
 		    MaxAttr = xml:get_attr_s(<<"max">>, Attrs),
 		    case catch jlib:binary_to_integer(MaxAttr) of
-		      Max when is_integer(Max), Max > 0, Max =< ConfigTimeout ->
+		      Max when is_integer(Max), Max > 0, Max =< MaxTimeout ->
 			  Max;
 		      _ ->
-			  ConfigTimeout
+			  DefaultTimeout
 		    end;
 		_ ->
 		    0
@@ -2912,7 +2920,13 @@ handle_unacked_stanzas(StateData)
 			    ejabberd_router:route(To, From, Err)
 		    end
 	      end,
-    F = fun(From, To, El, Time) ->
+    F = fun(From, _To, #xmlel{name = <<"presence">>}, _Time) ->
+		?DEBUG("Dropping presence stanza from ~s",
+		       [jlib:jid_to_string(From)]);
+	   (From, To, #xmlel{name = <<"iq">>} = El, _Time) ->
+		Err = jlib:make_error_reply(El, ?ERR_SERVICE_UNAVAILABLE),
+		ejabberd_router:route(To, From, Err);
+	   (From, To, El, Time) ->
 		%% We'll drop the stanza if it was <forwarded/> by some
 		%% encapsulating protocol as per XEP-0297.  One such protocol is
 		%% XEP-0280, which says: "When a receiving server attempts to
@@ -2922,7 +2936,7 @@ handle_unacked_stanzas(StateData)
 		%% stanza could easily lead to unexpected results as well.
 		case is_encapsulated_forward(El) of
 		  true ->
-		      ?DEBUG("Dropping forwarded stanza from ~s",
+		      ?DEBUG("Dropping forwarded message stanza from ~s",
 			     [xml:get_attr_s(<<"from">>, El#xmlel.attrs)]);
 		  false ->
 		      ReRoute(From, To, El, Time)
@@ -3010,12 +3024,14 @@ inherit_session_state(#state{user = U, server = S} = StateData, ResumeID) ->
     end.
 
 resume_session({Time, PID}) ->
-    (?GEN_FSM):sync_send_all_state_event(PID, {resume_session, Time}, 3000).
+    (?GEN_FSM):sync_send_all_state_event(PID, {resume_session, Time}, 5000).
 
 make_resume_id(StateData) ->
     {Time, _} = StateData#state.sid,
     jlib:term_to_base64({StateData#state.resource, Time}).
 
+add_resent_delay_info(_State, #xmlel{name = <<"iq">>} = El, _Time) ->
+    El;
 add_resent_delay_info(#state{server = From}, El, Time) ->
     jlib:add_delay_info(El, From, Time, <<"Resent">>).
 
