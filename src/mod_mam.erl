@@ -75,6 +75,10 @@ start(Host, Opts) ->
 				  ?NS_MAM_0, ?MODULE, process_iq_v0_3, IQDisc),
     gen_iq_handler:add_iq_handler(ejabberd_sm, Host,
 				  ?NS_MAM_0, ?MODULE, process_iq_v0_3, IQDisc),
+    gen_iq_handler:add_iq_handler(ejabberd_local, Host,
+				  ?NS_MAM_1, ?MODULE, process_iq_v0_3, IQDisc),
+    gen_iq_handler:add_iq_handler(ejabberd_sm, Host,
+				  ?NS_MAM_1, ?MODULE, process_iq_v0_3, IQDisc),
     ejabberd_hooks:add(user_receive_packet, Host, ?MODULE,
                        user_receive_packet, 500),
     ejabberd_hooks:add(user_send_packet, Host, ?MODULE,
@@ -123,6 +127,8 @@ stop(Host) ->
     gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_MAM_TMP),
     gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_MAM_0),
     gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_MAM_0),
+    gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_MAM_1),
+    gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_MAM_1),
     ejabberd_hooks:delete(remove_user, Host, ?MODULE,
 			  remove_user, 50),
     ejabberd_hooks:delete(anonymous_purge_hook, Host,
@@ -163,7 +169,11 @@ user_receive_packet(Pkt, C2SState, JID, Peer, _To) ->
                                       attrs = [{<<"by">>, LServer},
                                                {<<"xmlns">>, ?NS_MAM_TMP},
                                                {<<"id">>, ID}]},
-                    NewEls = [Archived|NewPkt#xmlel.children],
+		    StanzaID = #xmlel{name = <<"stanza-id">>,
+				      attrs = [{<<"by">>, LServer},
+                                               {<<"xmlns">>, ?NS_SID_0},
+                                               {<<"id">>, ID}]},
+                    NewEls = [Archived, StanzaID|NewPkt#xmlel.children],
                     NewPkt#xmlel{children = NewEls};
                 _ ->
                     NewPkt
@@ -188,9 +198,19 @@ user_send_packet(Pkt, C2SState, JID, Peer) ->
 muc_filter_message(Pkt, #state{config = Config} = MUCState,
 		   RoomJID, From, FromNick) ->
     if Config#config.mam ->
-	    NewPkt = strip_my_archived_tag(Pkt, MUCState#state.server_host),
-	    store_muc(MUCState, NewPkt, RoomJID, From, FromNick),
-	    NewPkt;
+	    By = jlib:jid_to_string(RoomJID),
+	    NewPkt = strip_my_archived_tag(Pkt, By),
+	    case store_muc(MUCState, NewPkt, RoomJID, From, FromNick) of
+		{ok, ID} ->
+		    StanzaID = #xmlel{name = <<"stanza-id">>,
+				      attrs = [{<<"by">>, By},
+                                               {<<"xmlns">>, ?NS_SID_0},
+                                               {<<"id">>, ID}]},
+                    NewEls = [StanzaID|NewPkt#xmlel.children],
+                    NewPkt#xmlel{children = NewEls};
+		_ ->
+		    NewPkt
+	    end;
 	true ->
 	    Pkt
     end.
@@ -339,8 +359,8 @@ should_archive(#xmlel{}) ->
 
 strip_my_archived_tag(Pkt, LServer) ->
     NewEls = lists:filter(
-               fun(#xmlel{name = <<"archived">>,
-                          attrs = Attrs}) ->
+               fun(#xmlel{name = Tag, attrs = Attrs})
+		  when Tag == <<"archived">>; Tag == <<"stanza-id">> ->
                        case catch jlib:nameprep(
                                     xml:get_attr_s(
                                       <<"by">>, Attrs)) of
@@ -716,7 +736,7 @@ send(From, To, Msgs, RSM, Count, IsComplete, #iq{sub_el = SubEl} = IQ) ->
 	      end,
     CompleteAttr = if NS == ?NS_MAM_TMP ->
 			   [];
-		      NS == ?NS_MAM_0 ->
+		      NS == ?NS_MAM_0; NS == ?NS_MAM_1 ->
 			   [{<<"complete">>, jlib:atom_to_binary(IsComplete)}]
 		   end,
     Els = lists:map(
@@ -728,14 +748,13 @@ send(From, To, Msgs, RSM, Count, IsComplete, #iq{sub_el = SubEl} = IQ) ->
 					      children = [El]}]}
 	    end, Msgs),
     RSMOut = make_rsm_out(Msgs, RSM, Count, QIDAttr ++ CompleteAttr, NS),
-    case NS of
-	?NS_MAM_TMP ->
+    if NS == ?NS_MAM_TMP; NS == ?NS_MAM_1 ->
 	    lists:foreach(
 	      fun(El) ->
 		      ejabberd_router:route(To, From, El)
 	      end, Els),
 	    IQ#iq{type = result, sub_el = RSMOut};
-	?NS_MAM_0 ->
+       NS == ?NS_MAM_0 ->
 	    ejabberd_router:route(
 	      To, From, jlib:iq_to_xml(IQ#iq{type = result, sub_el = []})),
 	    lists:foreach(
