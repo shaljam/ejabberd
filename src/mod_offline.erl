@@ -289,9 +289,9 @@ get_sm_features(Acc, _From, _To, _Node, _Lang) ->
     Acc.
 
 need_to_store(LServer, Packet) ->
-    Type = xml:get_tag_attr_s(<<"type">>, Packet),
-    if %% (Type /= <<"error">>) and (Type /= <<"groupchat">>)
-       (Type /= <<"headline">>) ->
+    %%Type = xml:get_tag_attr_s(<<"type">>, Packet),
+    %%if (Type /= <<"error">>) and (Type /= <<"groupchat">>)
+    %%   (Type /= <<"headline">>) ->
 	    case gen_mod:get_module_opt(
 		   LServer, ?MODULE, store_empty_body,
 		   fun(V) when is_boolean(V) -> V end,
@@ -300,10 +300,10 @@ need_to_store(LServer, Packet) ->
 		    xml:get_subtag(Packet, <<"body">>) /= false;
 		true ->
 		    true
-	    end;
-       true ->
-	    false
-    end.
+	    end.
+       %%true ->
+	    %%false
+    %%end.
 
 store_packet(From, To, Packet) ->
     case need_to_store(To#jid.lserver, Packet) of
