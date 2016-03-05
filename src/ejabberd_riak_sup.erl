@@ -5,7 +5,7 @@
 %%% Created : 29 Dec 2011 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -141,7 +141,7 @@ get_pids() ->
     [ejabberd_riak:get_proc(I) || I <- lists:seq(1, get_pool_size())].
 
 get_random_pid() ->
-    get_random_pid(now()).
+    get_random_pid(p1_time_compat:monotonic_time()).
 
 get_random_pid(Term) ->
     I = erlang:phash2(Term, get_pool_size()) + 1,

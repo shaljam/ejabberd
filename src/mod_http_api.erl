@@ -5,7 +5,7 @@
 %%% Created : 15 Sep 2014 by Christophe Romain <christophe.romain@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -114,7 +114,7 @@ check_permissions(#request{auth = HTTPAuth, headers = Headers}, Command)
             Auth =
                 case HTTPAuth of
                     {SJID, Pass} ->
-                        case jlib:string_to_jid(SJID) of
+                        case jid:from_string(SJID) of
                             #jid{user = User, server = Server} ->
                                 case ejabberd_auth:check_password(User, Server, Pass) of
                                     true -> {ok, {User, Server, Pass, Admin}};

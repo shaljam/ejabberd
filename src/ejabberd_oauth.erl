@@ -5,7 +5,7 @@
 %%% Created : 20 Mar 2015 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -125,7 +125,7 @@ get_client_identity(Client, Ctx) -> {ok, {Ctx, {client, Client}}}.
 verify_redirection_uri(_, _, Ctx) -> {ok, Ctx}.
 
 authenticate_user({User, Server}, {password, Password} = Ctx) ->
-    case jlib:make_jid(User, Server, <<"">>) of
+    case jid:make(User, Server, <<"">>) of
         #jid{} = JID ->
             Access =
                 ejabberd_config:get_option(
@@ -149,7 +149,7 @@ authenticate_user({User, Server}, {password, Password} = Ctx) ->
 
 authenticate_client(Client, Ctx) -> {ok, {Ctx, {client, Client}}}.
 
-verify_resowner_scope({user, User, Server}, Scope, Ctx) ->
+verify_resowner_scope({user, _User, _Server}, Scope, Ctx) ->
     Cmds = ejabberd_commands:get_commands(),
     Cmds1 = [sasl_auth | Cmds],
     RegisteredScope = [atom_to_binary(C, utf8) || C <- Cmds1],
@@ -164,7 +164,7 @@ verify_resowner_scope(_, _, _) ->
     {error, badscope}.
 
 
-associate_access_code(AccessCode, Context, AppContext) ->
+associate_access_code(_AccessCode, _Context, AppContext) ->
     %put(?ACCESS_CODE_TABLE, AccessCode, Context),
     {ok, AppContext}.
 
@@ -173,8 +173,8 @@ associate_access_token(AccessToken, Context, AppContext) ->
         proplists:get_value(<<"resource_owner">>, Context, <<"">>),
     Scope = proplists:get_value(<<"scope">>, Context, []),
     Expire = proplists:get_value(<<"expiry_time">>, Context, 0),
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     R = #oauth_token{
       token = AccessToken,
       us = {LUser, LServer},
@@ -184,14 +184,14 @@ associate_access_token(AccessToken, Context, AppContext) ->
     mnesia:dirty_write(R),
     {ok, AppContext}.
 
-associate_refresh_token(RefreshToken, Context, AppContext) ->
+associate_refresh_token(_RefreshToken, _Context, AppContext) ->
     %put(?REFRESH_TOKEN_TABLE, RefreshToken, Context),
     {ok, AppContext}.
 
 
 check_token(User, Server, Scope, Token) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     case catch mnesia:dirty_read(oauth_token, Token) of
         [#oauth_token{us = {LUser, LServer},
                       scope = TokenScope,
@@ -303,7 +303,7 @@ process(_Handlers,
 process(_Handlers,
 	#request{method = 'POST', q = Q, lang = _Lang,
 		 path = [_, <<"authorization_token">>]}) ->
-    ResponseType = proplists:get_value(<<"response_type">>, Q, <<"">>),
+    _ResponseType = proplists:get_value(<<"response_type">>, Q, <<"">>),
     ClientId = proplists:get_value(<<"client_id">>, Q, <<"">>),
     RedirectURI = proplists:get_value(<<"redirect_uri">>, Q, <<"">>),
     SScope = proplists:get_value(<<"scope">>, Q, <<"">>),

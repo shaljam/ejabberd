@@ -5,7 +5,7 @@
 %%% Created : 27 Nov 2002 by Alexey Shchepin <alexey@process-one.net>
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -86,7 +86,7 @@ route(From, To, Packet) ->
 
 route_error(From, To, ErrPacket, OrigPacket) ->
     #xmlel{attrs = Attrs} = OrigPacket,
-    case <<"error">> == xml:get_attr_s(<<"type">>, Attrs) of
+    case <<"error">> == fxml:get_attr_s(<<"type">>, Attrs) of
       false -> route(From, To, ErrPacket);
       true -> ok
     end.
@@ -99,7 +99,7 @@ register_route(Domain) ->
 -spec register_route(binary(), local_hint()) -> term().
 
 register_route(Domain, LocalHint) ->
-    case jlib:nameprep(Domain) of
+    case jid:nameprep(Domain) of
       error -> erlang:error({invalid_domain, Domain});
       LDomain ->
 	  Pid = self(),
@@ -161,7 +161,7 @@ register_routes(Domains) ->
 -spec unregister_route(binary()) -> term().
 
 unregister_route(Domain) ->
-    case jlib:nameprep(Domain) of
+    case jid:nameprep(Domain) of
       error -> erlang:error({invalid_domain, Domain});
       LDomain ->
 	  Pid = self(),
@@ -226,7 +226,8 @@ dirty_get_all_domains() ->
 init([]) ->
     update_tables(),
     mnesia:create_table(route,
-			[{ram_copies, [node()]}, {type, bag},
+			[{ram_copies, [node()]},
+			 {type, bag},
 			 {attributes, record_info(fields, route)}]),
     mnesia:add_table_copy(route, node(), ram_copies),
     mnesia:subscribe({table, route, simple}),
@@ -343,17 +344,17 @@ do_route(OrigFrom, OrigTo, OrigPacket) ->
 		end;
 	    Rs ->
 		Value = case
-			  ejabberd_config:get_local_option({domain_balancing,
-							    LDstDomain}, fun(D) when is_atom(D) -> D end)
+			  ejabberd_config:get_option({domain_balancing,
+						      LDstDomain}, fun(D) when is_atom(D) -> D end)
 			    of
-			  undefined -> now();
-			  random -> now();
-			  source -> jlib:jid_tolower(From);
-			  destination -> jlib:jid_tolower(To);
+			  undefined -> p1_time_compat:monotonic_time();
+			  random -> p1_time_compat:monotonic_time();
+			  source -> jid:tolower(From);
+			  destination -> jid:tolower(To);
 			  bare_source ->
-			      jlib:jid_remove_resource(jlib:jid_tolower(From));
+			      jid:remove_resource(jid:tolower(From));
 			  bare_destination ->
-			      jlib:jid_remove_resource(jlib:jid_tolower(To))
+			      jid:remove_resource(jid:tolower(To))
 			end,
 		case get_component_number(LDstDomain) of
 		  undefined ->
@@ -407,7 +408,13 @@ update_tables() ->
       false -> ok
     end.
 
-
+opt_type(domain_balancing) ->
+    fun (random) -> random;
+	(source) -> source;
+	(destination) -> destination;
+	(bare_source) -> bare_source;
+	(bare_destination) -> bare_destination
+    end;
 opt_type(domain_balancing_component_number) ->
     fun (N) when is_integer(N), N > 1 -> N end;
-opt_type(_) -> [domain_balancing_component_number].
+opt_type(_) -> [domain_balancing, domain_balancing_component_number].

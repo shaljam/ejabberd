@@ -1,12 +1,11 @@
 %%%-------------------------------------------------------------------
 %%% @author Evgeniy Khramtsov <ekhramtsov@process-one.net>
-%%% @copyright (C) 2013, Evgeniy Khramtsov
 %%% @doc
 %%%
 %%% @end
 %%% Created : 12 May 2013 by Evgeniy Khramtsov <ekhramtsov@process-one.net>
 %%%
-%%% ejabberd, Copyright (C) 2013-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2013-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -28,7 +27,7 @@
 -behaviour(ejabberd_config).
 
 %% API
--export([start/0, reopen_log/0, get/0, set/1, get_log_path/0, opt_type/1]).
+-export([start/0, reopen_log/0, rotate_log/0, get/0, set/1, get_log_path/0, opt_type/1]).
 
 -include("ejabberd.hrl").
 
@@ -37,6 +36,7 @@
 -spec start() -> ok.
 -spec get_log_path() -> string().
 -spec reopen_log() -> ok.
+-spec rotate_log() -> ok.
 -spec get() -> {loglevel(), atom(), string()}.
 -spec set(loglevel() | {loglevel(), list()}) -> {module, module()}.
 
@@ -73,8 +73,6 @@ opt_type(log_rate_limit) ->
     fun(I) when is_integer(I), I >= 0 -> I end;
 opt_type(_) ->
     [log_rotate_date, log_rotate_size, log_rotate_count, log_rate_limit].
-
--ifdef(LAGER).
 
 get_integer_env(Name, Default) ->
     case application:get_env(ejabberd, Name) of
@@ -129,6 +127,10 @@ start() ->
     ok.
 
 reopen_log() ->
+    %% Lager detects external log rotation automatically.
+    ok.
+
+rotate_log() ->
     lager_crash_log ! rotate,
     lists:foreach(
       fun({lager_file_backend, File}) ->
@@ -178,59 +180,3 @@ set(LogLevel) when is_integer(LogLevel) ->
 set({_LogLevel, _}) ->
     error_logger:error_msg("custom loglevels are not supported for 'lager'"),
     {module, lager}.
-
--else.
-
-start() ->
-    set(4),
-    LogPath = get_log_path(),
-    error_logger:add_report_handler(p1_logger_h, LogPath),
-    ok.
-
-reopen_log() ->
-    %% TODO: Use the Reopen log API for logger_h ?
-    p1_logger_h:reopen_log(),
-    reopen_sasl_log().
-
-get() ->
-    p1_loglevel:get().
-
-set(LogLevel) when LogLevel >=0, LogLevel =< 5 ->
-    p1_loglevel:set(LogLevel);
-set(LogLevel) ->
-    throw({wrong_loglevel, LogLevel}).
-
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================
-reopen_sasl_log() ->
-    case application:get_env(sasl,sasl_error_logger) of
-	{ok, {file, SASLfile}} ->
-	    error_logger:delete_report_handler(sasl_report_file_h),
-            rotate_sasl_log(SASLfile),
-	    error_logger:add_report_handler(sasl_report_file_h,
-	        {SASLfile, get_sasl_error_logger_type()});
-	_ -> false
-	end,
-    ok.
-
-rotate_sasl_log(Filename) ->
-    case file:read_file_info(Filename) of
-        {ok, _FileInfo} ->
-            file:rename(Filename, [Filename, ".0"]),
-            ok;
-        {error, _Reason} ->
-            ok
-    end.
-
-%% Function copied from Erlang/OTP lib/sasl/src/sasl.erl which doesn't export it
-get_sasl_error_logger_type () ->
-    case application:get_env (sasl, errlog_type) of
-	{ok, error} -> error;
-	{ok, progress} -> progress;
-	{ok, all} -> all;
-	{ok, Bad} -> exit ({bad_config, {sasl, {errlog_type, Bad}}});
-	_ -> all
-    end.
-
--endif.

@@ -5,11 +5,10 @@
 %%% Created : 17 Jul 2008 by Pablo Polvorin <pablo.polvorin@process-one.net>
 %%%-------------------------------------------------------------------
 %%% @author Evgeniy Khramtsov <ekhramtsov@process-one.net>
-%%% @copyright (C) 2012, Evgeniy Khramtsov
 %%% @doc
 %%%
 %%%
-%%% ejabberd, Copyright (C) 2002-2015   ProcessOne
+%%% ejabberd, Copyright (C) 2002-2016   ProcessOne
 %%%
 %%% This program is free software; you can redistribute it and/or
 %%% modify it under the terms of the GNU General Public License as
@@ -65,7 +64,7 @@
 -define(NS_PIEFXIS, <<"http://www.xmpp.org/extensions/xep-0227.html#ns">>).
 -define(NS_XI, <<"http://www.w3.org/2001/XInclude">>).
 
--record(state, {xml_stream_state :: xml_stream:xml_stream_state(),
+-record(state, {xml_stream_state :: fxml_stream:xml_stream_state(),
                 user = <<"">>    :: binary(),
                 server = <<"">>  :: binary(),
                 fd               :: file:io_device(),
@@ -86,7 +85,7 @@ import_file(FileName, State) ->
     case file:open(FileName, [read, binary]) of
 	{ok, Fd} ->
             Dir = filename:dirname(FileName),
-            XMLStreamState = xml_stream:new(self(), infinity),
+            XMLStreamState = fxml_stream:new(self(), infinity),
             Res = process(State#state{xml_stream_state = XMLStreamState,
                                       fd = Fd,
                                       dir = Dir}),
@@ -243,7 +242,7 @@ export_users([], _Server, _Fd) ->
 %%%% Utilities
 export_user(User, Server, Fd) ->
     Password = ejabberd_auth:get_password_s(User, Server),
-    LServer = jlib:nameprep(Server),
+    LServer = jid:nameprep(Server),
     PasswordFormat = ejabberd_config:get_option({auth_password_format, LServer}, fun(X) -> X end, plain),
     Pass = case Password of
       {_,_,_,_} ->
@@ -258,7 +257,7 @@ export_user(User, Server, Fd) ->
         get_privacy(User, Server) ++
         get_roster(User, Server) ++
         get_private(User, Server),
-    print(Fd, xml:element_to_binary(
+    print(Fd, fxml:element_to_binary(
                 #xmlel{name = <<"user">>,
                        attrs = [{<<"name">>, User},
                                 {<<"password">>, Pass}],
@@ -282,7 +281,7 @@ parse_scram_password(PassData) ->
   }.
 
 get_vcard(User, Server) ->
-    JID = jlib:make_jid(User, Server, <<>>),
+    JID = jid:make(User, Server, <<>>),
     case mod_vcard:process_sm_iq(JID, JID, #iq{type = get}) of
         #iq{type = result, sub_el = [_|_] = VCardEls} ->
             VCardEls;
@@ -336,7 +335,7 @@ get_privacy(User, Server) ->
 
 %% @spec (Dir::string(), Hosts::[string()]) -> ok
 get_roster(User, Server) ->
-    JID = jlib:make_jid(User, Server, <<>>),
+    JID = jid:make(User, Server, <<>>),
     case mod_roster:get_roster(User, Server) of
         [_|_] = Items ->
             Subs =
@@ -350,8 +349,8 @@ get_roster(User, Server) ->
                           [#xmlel{name = <<"presence">>,
                                   attrs =
                                       [{<<"from">>,
-                                        jlib:jid_to_string(R#roster.jid)},
-                                       {<<"to">>, jlib:jid_to_string(JID)},
+                                        jid:to_string(R#roster.jid)},
+                                       {<<"to">>, jid:to_string(JID)},
                                        {<<"xmlns">>, <<"jabber:client">>},
                                        {<<"type">>, <<"subscribe">>}],
                                   children =
@@ -388,17 +387,17 @@ get_private(User, Server) ->
 process(#state{xml_stream_state = XMLStreamState, fd = Fd} = State) ->
     case file:read(Fd, ?CHUNK_SIZE) of
         {ok, Data} ->
-            NewXMLStreamState = xml_stream:parse(XMLStreamState, Data),
+            NewXMLStreamState = fxml_stream:parse(XMLStreamState, Data),
             case process_els(State#state{xml_stream_state =
                                              NewXMLStreamState}) of
                 {ok, NewState} ->
                     process(NewState);
                 Err ->
-                    xml_stream:close(NewXMLStreamState),
+                    fxml_stream:close(NewXMLStreamState),
                     Err
             end;
         eof ->
-            xml_stream:close(XMLStreamState),
+            fxml_stream:close(XMLStreamState),
             ok
     end.
 
@@ -416,7 +415,7 @@ process_els(State) ->
     end.
 
 process_el({xmlstreamstart, <<"server-data">>, Attrs}, State) ->
-    case xml:get_attr_s(<<"xmlns">>, Attrs) of
+    case fxml:get_attr_s(<<"xmlns">>, Attrs) of
         ?NS_PIEFXIS ->
             {ok, State};
         ?NS_PIE ->
@@ -431,7 +430,7 @@ process_el({xmlstreamcdata, _}, State) ->
 process_el({xmlstreamelement, #xmlel{name = <<"xi:include">>,
                                      attrs = Attrs}},
            #state{dir = Dir, user = <<"">>} = State) ->
-    FileName = xml:get_attr_s(<<"href">>, Attrs),
+    FileName = fxml:get_attr_s(<<"href">>, Attrs),
     case import_file(filename:join([Dir, FileName]), State) of
         ok ->
             {ok, State};
@@ -444,8 +443,8 @@ process_el({xmlstreamstart, <<"host">>, Attrs}, State) ->
 process_el({xmlstreamelement, #xmlel{name = <<"host">>,
                                      attrs = Attrs,
                                      children = Els}}, State) ->
-    JIDS = xml:get_attr_s(<<"jid">>, Attrs),
-    case jlib:string_to_jid(JIDS) of
+    JIDS = fxml:get_attr_s(<<"jid">>, Attrs),
+    case jid:from_string(JIDS) of
         #jid{lserver = S} ->
             case lists:member(S, ?MYHOSTS) of
                 true ->
@@ -487,8 +486,8 @@ process_users([], State) ->
 
 process_user(#xmlel{name = <<"user">>, attrs = Attrs, children = Els},
              #state{server = LServer} = State) ->
-    Name = xml:get_attr_s(<<"name">>, Attrs),
-    Password = xml:get_attr_s(<<"password">>, Attrs),
+    Name = fxml:get_attr_s(<<"name">>, Attrs),
+    Password = fxml:get_attr_s(<<"password">>, Attrs),
     PasswordFormat = ejabberd_config:get_option({auth_password_format, LServer}, fun(X) -> X end, plain),
     Pass = case PasswordFormat of
       scram ->
@@ -500,7 +499,7 @@ process_user(#xmlel{name = <<"user">>, attrs = Attrs, children = Els},
       _ -> Password
     end,
 
-    case jlib:nodeprep(Name) of
+    case jid:nodeprep(Name) of
         error ->
             stop("Invalid 'user': ~s", [Name]);
         LUser ->
@@ -526,7 +525,7 @@ process_user_els([], State) ->
 
 process_user_el(#xmlel{name = Name, attrs = Attrs, children = Els} = El,
                 State) ->
-    case {Name, xml:get_attr_s(<<"xmlns">>, Attrs)} of
+    case {Name, fxml:get_attr_s(<<"xmlns">>, Attrs)} of
         {<<"query">>, ?NS_ROSTER} ->
             process_roster(El, State);
         {<<"query">>, ?NS_PRIVACY} ->
@@ -580,12 +579,12 @@ process_roster(El, State = #state{user = U, server = S}) ->
 %%%==================================
 %%%% Export server
 process_privacy(El, State = #state{user = U, server = S}) ->
-    JID = jlib:make_jid(U, S, <<"">>),
+    JID = jid:make(U, S, <<"">>),
     case mod_privacy:process_iq_set(
            [], JID, JID, #iq{type = set, sub_el = El}) of
         {error, Error} = Err ->
             #xmlel{children = Els} = El,
-            Name = case xml:remove_cdata(Els) of
+            Name = case fxml:remove_cdata(Els) of
               [#xmlel{name = N}] -> N;
               _ -> undefined
             end,
@@ -606,7 +605,7 @@ process_privacy(El, State = #state{user = U, server = S}) ->
 
 %% @spec (Dir::string()) -> ok
 process_private(El, State = #state{user = U, server = S}) ->
-    JID = jlib:make_jid(U, S, <<"">>),
+    JID = jid:make(U, S, <<"">>),
     case mod_private:process_sm_iq(
            JID, JID, #iq{type = set, sub_el = El}) of
         #iq{type = result} ->
@@ -618,7 +617,7 @@ process_private(El, State = #state{user = U, server = S}) ->
 %%%==================================
 %%%% Export host
 process_vcard(El, State = #state{user = U, server = S}) ->
-    JID = jlib:make_jid(U, S, <<"">>),
+    JID = jid:make(U, S, <<"">>),
     case mod_vcard:process_sm_iq(
            JID, JID, #iq{type = set, sub_el = El}) of
         #iq{type = result} ->
@@ -629,10 +628,10 @@ process_vcard(El, State = #state{user = U, server = S}) ->
 
 %% @spec (Dir::string(), Host::string()) -> ok
 process_offline_msg(El, State = #state{user = U, server = S}) ->
-    FromS = xml:get_attr_s(<<"from">>, El#xmlel.attrs),
-    case jlib:string_to_jid(FromS) of
+    FromS = fxml:get_attr_s(<<"from">>, El#xmlel.attrs),
+    case jid:from_string(FromS) of
         #jid{} = From ->
-            To = jlib:make_jid(U, S, <<>>),
+            To = jid:make(U, S, <<>>),
             NewEl = jlib:replace_from_to(From, To, El),
             case catch mod_offline:store_packet(From, To, NewEl) of
                 {'EXIT', _} = Err ->
@@ -646,10 +645,10 @@ process_offline_msg(El, State = #state{user = U, server = S}) ->
 
 %% @spec (Dir::string(), Fn::string(), Host::string()) -> ok
 process_presence(El, #state{user = U, server = S} = State) ->
-    FromS = xml:get_attr_s(<<"from">>, El#xmlel.attrs),
-    case jlib:string_to_jid(FromS) of
+    FromS = fxml:get_attr_s(<<"from">>, El#xmlel.attrs),
+    case jid:from_string(FromS) of
         #jid{} = From ->
-            To = jlib:make_jid(U, S, <<>>),
+            To = jid:make(U, S, <<>>),
             NewEl = jlib:replace_from_to(From, To, El),
             ejabberd_router:route(From, To, NewEl),
             {ok, State};
@@ -714,31 +713,9 @@ make_xinclude(Fn) ->
     Base = filename:basename(Fn),
     io_lib:format("<xi:include href='~s'/>", [Base]).
 
-%%%==================================
-%%%% Export user
-%% @spec (Fd, Username::string(), Host::string()) -> ok
-%% @doc Extract user information and print it.
-%% @spec (Username::string(), Host::string()) -> string()
-%% @spec (InfoName::atom(), Username::string(), Host::string()) -> string()
-%%%==================================
-%%%% Interface with ejabberd offline storage
-%% Copied from mod_offline.erl and customized
-%%%==================================
-%%%% Interface with ejabberd private storage
-%%%==================================
-%%%% Disk file access
-%% @spec () -> string()
-%% @spec (Dir::string(), FnT::string()) -> string()
-%% @spec (FnT::string(), Host::string()) -> FnH::string()
-%% @doc Make the filename for the host.
-%% Example: ``("20080804-231550", "jabber.example.org") -> "20080804-231550_jabber_example_org.xml"''
-%% @spec (Fn::string()) -> {ok, Fd}
-%% @spec (Fd) -> ok
-%% @spec (Fd, String::string()) -> ok
 print(Fd, String) ->
-%%%==================================
-%%% vim: set filetype=erlang tabstop=8 foldmarker=%%%%,%%%= foldmethod=marker:
     file:write(Fd, String).
 
 opt_type(auth_password_format) -> fun (X) -> X end;
 opt_type(_) -> [auth_password_format].
+
