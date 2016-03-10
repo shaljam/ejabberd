@@ -415,12 +415,14 @@ normal_state({route, From, <<"">>,
 	  end;
       _ ->
 	  case fxml:get_attr_s(<<"type">>, Attrs) of
-	    <<"error">> -> ok;
+	    <<"error">> -> NewState = StateData,
+				ok;
 	    _ ->
-		handle_roommessage_from_nonparticipant(Packet, Lang,
+		%% getting new state cuz it might be changed if thats a decline!
+		NewState = handle_roommessage_from_nonparticipant(Packet, Lang,
 						       StateData, From)
 	  end,
-	  {next_state, normal_state, StateData}
+	  {next_state, normal_state, NewState}
     end;
 normal_state({route, From, <<"">>,
 	      #xmlel{name = <<"iq">>} = Packet},
@@ -921,7 +923,11 @@ route(Pid, From, ToNick, Packet) ->
 process_groupchat_message(From,
 			  #xmlel{name = <<"message">>, attrs = Attrs} = Packet,
 			  StateData) ->
-    Items = items_with_affiliation(member, StateData) ++ items_with_affiliation(owner, StateData),
+	  %% Items is list of owner, admins and members of room
+	  %% we send messages to them instead of online users
+    Items = items_with_affiliation(owner, StateData) ++
+			items_with_affiliation(admin, StateData) ++
+			items_with_affiliation(member, StateData),
     Lang = fxml:get_attr_s(<<"xml:lang">>, Attrs),
     case is_user_online(From, StateData) orelse
 	   is_user_allowed_message_nonparticipant(From, StateData)
@@ -2880,7 +2886,9 @@ find_changed_items(UJID, UAffiliation, URole,
 				  find_changed_items(UJID, UAffiliation, URole,
 						     Items, Lang, StateData,
 						     [MoreRes | Res]);
-			      false -> {error, ?ERR_NOT_ALLOWED}
+			      false ->
+							?DEBUG("not allowed 01, ~p", [UJID]),
+							{error, ?ERR_NOT_ALLOWED}
 			    end
 		      end
 		end;
@@ -2911,7 +2919,14 @@ find_changed_items(UJID, UAffiliation, URole,
 						  jid:tolower(jid:remove_resource(UJID));
 					    _ -> true
 					  end;
-				      _ -> false
+				      _ -> case UAffiliation of
+										 member ->
+											 ?DEBUG("will check if a member removing self, ~p, ~p", [UJID, JID]),
+											 jid:tolower(jid:remove_resource(UJID))
+												 ==
+												 jid:tolower(jid:remove_resource(JID));
+										 _ -> false
+									 end
 				    end,
 		      case CanChangeRA of
 			nothing ->
@@ -4314,6 +4329,7 @@ get_roomdesc_tail(StateData, Lang) ->
       (iolist_to_binary(integer_to_list(Len)))/binary, ")">>.
 
 get_mucroom_disco_items(StateData) ->
+	?DEBUG("get_mucroom_disco_items users: ~p", [(?DICT):to_list(StateData#state.users)]),
     lists:map(fun ({_LJID, Info}) ->
 		      Nick = Info#user.nick,
 		      #xmlel{name = <<"item">>,
@@ -4590,11 +4606,24 @@ handle_roommessage_from_nonparticipant(Packet, Lang,
 				       StateData, From) ->
     case catch check_decline_invitation(Packet) of
       {true, Decline_data} ->
-	  send_decline_invitation(Decline_data,
-				  StateData#state.jid, From);
+				send_decline_invitation(Decline_data,
+					StateData#state.jid, From),
+		?DEBUG("will set affiliation for ~p to none", [From]),
+		%% setting affiliation for decliner to none
+		NSD = set_affiliation(From, none, StateData),
+		%% and saving state if the room is persistent
+		case (NSD#state.config)#config.persistent of
+			true ->
+				mod_muc:store_room(NSD#state.server_host,
+					NSD#state.host, NSD#state.room,
+					make_opts(NSD));
+			_ -> ok
+		end,
+				NSD;
       _ ->
 	  send_error_only_occupants(Packet, Lang,
-				    StateData#state.jid, From)
+				    StateData#state.jid, From),
+				StateData
     end.
 
 %% Check in the packet is a decline.
@@ -4696,6 +4725,20 @@ element_size(El) ->
     byte_size(fxml:element_to_binary(El)).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Multicast
+
+send_multiple(From, Server, Users, Packet) ->
+	JIDs = [ User#user.jid || {_, User} <- ?DICT:to_list(Users)],
+	ejabberd_router_multicast:route_multicast(From, Server, JIDs, Packet).
+
+send_multiple2(From, Server, Users, Packet) ->
+	%% create jids from affiliations
+	NJIDs = [jid:from_string(element(2, fxml:get_tag_attr(<<"jid">>, User))) || User <- Users],
+%%  JIDs = add_all_users(Users),
+	?DEBUG("send_multiple2 Users: ~p, NJIDs: ~p", [Users, NJIDs]),
+	ejabberd_router_multicast:route_multicast(From, Server, NJIDs, Packet).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Detect messange stanzas that don't have meaninful content
 
 has_body_or_subject(Packet) ->
@@ -4705,28 +4748,16 @@ has_body_or_subject(Packet) ->
 	(_) -> true
     end, Packet#xmlel.children).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Multicast
-
-send_multiple(From, Server, Users, Packet) ->
-    JIDs = [ User#user.jid || {_, User} <- ?DICT:to_list(Users)],
-    ejabberd_router_multicast:route_multicast(From, Server, JIDs, Packet).
-
-send_multiple2(From, Server, Users, Packet) ->
-  JIDs = add_all_users(Users),
-%%   ?DEBUG("\n====test2====\n~p\n-------\n~p\n====test2====\n", [JIDs,Users]),
-  ejabberd_router_multicast:route_multicast(From, Server, JIDs, Packet).
-
-add_all_users(Array) ->
-  add_all_users(Array,[]).
-add_all_users([], State) ->
-  State;
-add_all_users([Head|Tail], State) ->
-  From = xml:get_tag_attr(<<"jid">>, Head),
-  {value,From1} = From,
-  FromUserParts = string:tokens(binary_to_list(From1), "@"),
-  [FromUser|T] = FromUserParts,
-  [FromServer|_] = T,
-  FromJID = jlib:make_jid(list_to_binary(FromUser), list_to_binary(FromServer), <<"">>),
-  NewState = State ++ [FromJID],
-  add_all_users(Tail, NewState).
+%%add_all_users(Array) ->
+%%  add_all_users(Array,[]).
+%%add_all_users([], State) ->
+%%  State;
+%%add_all_users([Head|Tail], State) ->
+%%  From = fxml:get_tag_attr(<<"jid">>, Head),
+%%  {value,From1} = From,
+%%  FromUserParts = string:tokens(binary_to_list(From1), "@"),
+%%  [FromUser|T] = FromUserParts,
+%%  [FromServer|_] = T,
+%%  FromJID = jlib:make_jid(list_to_binary(FromUser), list_to_binary(FromServer), <<"">>),
+%%  NewState = State ++ [FromJID],
+%%  add_all_users(Tail, NewState).
