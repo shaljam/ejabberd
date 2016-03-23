@@ -495,9 +495,9 @@ remove_msg_by_node(To, <<Seq:20/binary, "+", From_s/binary>>) ->
     end.
 
 need_to_store(LServer, Packet) ->
-    Type = fxml:get_tag_attr_s(<<"type">>, Packet),
-    if (Type /= <<"error">>) and (Type /= <<"groupchat">>)
-       and (Type /= <<"headline">>) ->
+%%    Type = fxml:get_tag_attr_s(<<"type">>, Packet),
+%%    if (Type /= <<"error">>) and (Type /= <<"groupchat">>)
+%%       and (Type /= <<"headline">>) ->
 	    case has_offline_tag(Packet) of
 		false ->
 		    case check_store_hint(Packet) of
@@ -522,10 +522,10 @@ need_to_store(LServer, Packet) ->
 		    end;
 		true ->
 		    false
-	    end;
-       true ->
-	    false
-    end.
+	    end.
+%%       true ->
+%%	    false
+%%    end.
 
 store_packet(From, To, Packet) ->
     case need_to_store(To#jid.lserver, Packet) of
